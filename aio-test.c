@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include <assert.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -10,6 +8,7 @@
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <errno.h>
 #include <linux/aio_abi.h>
 
 #include "ccan/list/list.h"
@@ -25,10 +24,10 @@ struct conf {
 	size_t op_size;
 	size_t nops;
 	unsigned wr_p;
-	size_t create_size;
 	char *filename;
 	size_t queue_depth;
 	bool buffered;
+	bool drop_caches;
 };
 
 struct io_op {
@@ -59,9 +58,31 @@ io_getevents(aio_context_t ctx, long min_nr, long nr,
 }
 
 static inline int
-io_destroy(aio_context_t ctx)
-{
+io_destroy(aio_context_t ctx) {
     return syscall(SYS_io_destroy, ctx);
+}
+
+static void
+drop_caches(void) {
+	int fd;
+	const char fname[] = "/proc/sys/vm/drop_caches";
+
+	char data[16];
+	snprintf(data, sizeof(data), "%d\n", 3);
+
+	if ((fd = open(fname, O_WRONLY)) == -1) {
+		fprintf(stderr, "Failed to drop caches: open %s: %s (requires root)\n", fname, strerror(errno));
+		exit(1);
+	}
+
+	size_t data_len = strnlen(data, sizeof(data));
+	if (write(fd, data, data_len) != data_len) {
+		fprintf(stderr, "Failed to drop caches: write %s: %s\n", fname, strerror(errno));
+		exit(1);
+	}
+
+	close(fd);
+	return;
 }
 
 static struct io_op *
@@ -145,14 +166,14 @@ io_op_fill_iocb(struct io_op *op, int fd, size_t total_size, struct conf *cnf) {
 
 static void
 print_help(FILE *f, char *p) {
-	fprintf(f,"Usage: %s [-o op_size] [-n nops] [-w write_percentage] [-c creat_file_size] [-q queue_depth] [-b (for buffered IO)] -f filename\n", p);
+	fprintf(f,"Usage: %s [-o op_size] [-n nops] [-w write_percentage] -q queue_depth] [-b (for buffered IO)] [-d (drop caches)] -f filename\n", p);
 }
 
 static void
 parse_conf(struct conf *cnf, int argc, char *argv[]) {
 
 	int opt;
-	while ((opt = getopt(argc, argv, "ho:n:w:f:c:q:b")) != -1) {
+	while ((opt = getopt(argc, argv, "ho:n:w:f:c:q:bd")) != -1) {
 		switch (opt) {
 			case 'o':
 			cnf->op_size = atol(optarg);
@@ -170,16 +191,16 @@ parse_conf(struct conf *cnf, int argc, char *argv[]) {
 			cnf->filename = optarg;
 			break;
 
-			case 'c':
-			cnf->create_size = atol(optarg);
-			break;
-
 			case 'q':
 			cnf->queue_depth = atol(optarg);
 			break;
 
 			case 'b':
 			cnf->buffered = true;
+			break;
+
+			case 'd':
+			cnf->drop_caches = true;
 			break;
 
 			case 'h':
@@ -210,20 +231,9 @@ open_file(struct conf *cnf) {
 	if (!cnf->buffered)
 		oflags |= O_DIRECT;
 
-	if (cnf->create_size > 0) {
-		oflags |= O_CREAT;
-	}
-
 	if ((fd = open(cnf->filename, oflags, S_IRUSR | S_IWUSR)) == -1) {
 		perror(cnf->filename);
 		exit(1);
-	}
-
-	if (cnf->create_size > 0) {
-		if (truncate(cnf->filename, cnf->create_size) == -1) {
-			perror("truncate");
-			exit(1);
-		}
 	}
 
 	return fd;
@@ -236,9 +246,9 @@ int main(int argc, char *argv[])
 		.op_size = OP_SIZE,
 		.nops = NOPS,
 		.wr_p = WR_P,
-		.create_size = 0,
 		.queue_depth = QUEUE_DEPTH,
 		.buffered = false,
+		.drop_caches = false,
 	};
 
 	parse_conf(&cnf, argc, argv);
@@ -249,8 +259,8 @@ int main(int argc, char *argv[])
 	}
 
 
-	printf("CONF: filename:%s op_size:%zd nops:%zd wr_p:%u create_size:%zd queue_depth:%zd buffered:%u\n",
-	        cnf.filename, cnf.op_size, cnf.nops, cnf.wr_p, cnf.create_size, cnf.queue_depth, cnf.buffered);
+	printf("CONF: filename:%s op_size:%zd nops:%zd wr_p:%u queue_depth:%zd buffered:%u drop_caches:%u\n",
+	        cnf.filename, cnf.op_size, cnf.nops, cnf.wr_p, cnf.queue_depth, cnf.buffered, cnf.drop_caches);
 
 
 	int fd;
@@ -272,6 +282,8 @@ int main(int argc, char *argv[])
 	}
 
 	io_op_slab_init(&slab, cnf.queue_depth, cnf.op_size);
+	if (cnf.drop_caches)
+		drop_caches();
 
 	struct iocb *iocb_ptrs[cnf.queue_depth];
 	struct io_event io_events[cnf.queue_depth];
