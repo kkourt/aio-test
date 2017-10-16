@@ -3,7 +3,7 @@
 all: aio-test aio-example
 
 CC=gcc
-CFLAGS= -Wall -Iccan/ -ggdb3 -O2
+CFLAGS= -Wall -Iccan/ -ggdb3 -O2 -D_GNU_SOURCE
 
 aio-example: aio-example.c
 	$(CC) $(CFLAGS) $< -o $@

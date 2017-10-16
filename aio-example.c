@@ -10,7 +10,7 @@
 #include <assert.h>
 
 // uses the kernel-based aio  syscalls directly
-// (NOT libc's aio(7) that use threadS)
+// (NOT libc's aio(7) that use threads)
 
 // syscall wrappers
 static inline int
@@ -41,7 +41,7 @@ int main(int argc, char *argv[])
     aio_context_t ioctx = 0;
     unsigned maxevents = 128;
 
-    int fd = open("/dev/zero", O_RDONLY /* | O_DIRECT */);
+    int fd = open("FILE", O_RDONLY | O_DIRECT);
     if (fd == -1) {
         perror(argv[1]);
         exit(1);
@@ -52,10 +52,9 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-
-    // setup an io operation
-    char buff1[4096];    // IO has to be 4k-aligned
-    struct iocb iocb1;
+    // first operation
+    char buff1[512];
+    struct iocb iocb1 = {0};
     iocb1.aio_data       = 0xbeef; /* will be returned in events data */
     iocb1.aio_fildes     = fd;
     iocb1.aio_lio_opcode = IOCB_CMD_PREAD;
@@ -64,33 +63,33 @@ int main(int argc, char *argv[])
     iocb1.aio_nbytes     = sizeof(buff1);
     iocb1.aio_offset     = 0;
 
-    // setup a second io operation
-    char buff2[4096];    // IO has to be 4K-aligned
-    struct iocb iocb2;
+    // second operation
+    char buff2[512];
+    struct iocb iocb2 = {0};
     iocb2.aio_data       = 0xbaba; /* will be returned in events data */
     iocb2.aio_fildes     = fd;
     iocb2.aio_lio_opcode = IOCB_CMD_PREAD;
     iocb2.aio_reqprio    = 0;
     iocb2.aio_buf        = (uintptr_t)buff2;
     iocb2.aio_nbytes     = sizeof(buff2);
-    iocb2.aio_offset     = 0;
+    iocb2.aio_offset     = 4096;
 
     struct iocb *iocb_ptrs[2] = { &iocb1, &iocb2 };
 
-    /* submit operations */
+    // submit operations
     int ret = io_submit(ioctx, 2, iocb_ptrs);
     if (ret < 0) {
         perror("io_submit");
-        abort();
+        exit(1);
     } else if (ret != 2) {
-        perror("io_submit: partial success");
-        abort();
+        perror("io_submit: unhandled partial success");
+        exit(1);
     }
 
     size_t nevents = 2;
     struct io_event events[nevents];
     while (nevents > 0) {
-        // wait for at least one event
+       // wait for at least one event
         ret = io_getevents(ioctx, 1 /* min */, nevents, events, NULL);
         if (ret < 0) {
             perror("io_getevents");
