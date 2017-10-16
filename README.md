@@ -1,4 +1,5 @@
 Code to illustrate linux-aio. 
+See: http://kkourt.io/blog/2017/10-14-linux-aio.html
 
 - `aio-example.c`: simple example of the interface
 - `aio-test.c`: utility that submits and completes async IO requests
